@@ -6,14 +6,19 @@
 #include "I2Cdev.h"
 #include "MPU6050.h"
 #include "Wire.h"
-#include "Adafruit_VL53L0X.h"
+#include "VL53L1X.h"
 
 const char* ssid = "Juanito";
 const char* password = "olelaferia";
-const char* mqtt_server = "192.168.175.99";
+const char* mqtt_server = "mqtt.eclipseprojects.io"; //192.168.241.170 para casa
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+WiFiClient wifiClientTx;
+
+PubSubClient client(wifiClientTx);
+
+void callback(char* topic, byte* payload, unsigned int length);
+
+String buzz="";
 
 //DHT11
 #define DHT_PIN 17
@@ -29,6 +34,9 @@ DHT dht(DHT_PIN, DHTTYPE);
 
 TinyGPSPlus gps;
 
+//pressure
+#define PRESS_PIN 33
+
 //MPU6050 Accel/gyro
 MPU6050 sensor;
 
@@ -42,66 +50,42 @@ byte dataH, dataL;
 int data;
 
 //TOF
-Adafruit_VL53L0X tof = Adafruit_VL53L0X();
+VL53L1X tof;
+
+//BUZZER
+#define BUZZER_PIN 12
 
 static const uint64_t UPDATE_INTERVAL = 4000;
+unsigned long lastUpdate =0;
 
-void setup() {
-  Serial.begin(115200);
-  Serial1.begin(GPS_BAUD, SERIAL_8N1, 25, 16);
-  Serial2.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
-  //WIFI CONN
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.println("Conectando a WiFi...");
-  }
-  Serial.println("Conectado a WiFi");
-
-  //MQTT
-  client.setServer(mqtt_server, 1883);
-  while (!client.connected()) {
-    if (client.connect("ESP32Client")) {
-      Serial.println("Conectado al broker MQTT");
-    } else {
-      Serial.println("Error de conexión MQTT, rc=");
-      Serial.print(client.state());
-      delay(2000);
-    }
+void callback(char* topic, byte* payload, unsigned int length){
+  String top = topic;
+  String mensaje;
+  for(int i=0; i<length ; i++){
+    mensaje += (char)payload[i];
   }
 
-  dht.begin(); //DHT
-  Wire.begin(); //I2C
-
-/*   for(byte addr= 1; addr <127; addr++){
-    Wire.beginTransmission(addr);
-    if(Wire.endTransmission()==0){
-      Serial.print("I2C device found at: 0x");
-      Serial.println(addr, HEX);
-    }
-  } */
-
-  sensor.initialize(); //ACCEL/GYRO
-  //tof.begin();
-  //offset calibration
-  sensor.getAcceleration(&ax, &ay, &az);
-
-  float x_offset=atan(ax/sqrt(pow(ay,2) + pow(az,2)))*(180.0/3.14);
-  float y_offset=atan(ay/sqrt(pow(ax,2) + pow(az,2)))*(180.0/3.14);
+  if(mensaje=="buzzer:1:1"){
+    tone(BUZZER_PIN, 523, 1000);
+    Serial.println("buzz!");
+    buzz="1";
+  }else{
+    noTone(BUZZER_PIN);
+    buzz="0";
+  }
 }
 
-void loop() {
-
+void publishSensors(){
   //TEMP
   float temp = dht.readTemperature();
   // Publish data on theme
   String payload = "temperatura:"+String(temp)+":1";
-  client.publish("sensors/temperatura", payload.c_str());
+  client.publish("ibaby/sensors/temperatura", payload.c_str());
 
   //HUM
   float hum = dht.readHumidity();
   payload = "humedad:"+String(hum)+":2";
-  client.publish("sensors/humedad", payload.c_str());
+  client.publish("ibaby/sensors/humedad", payload.c_str());
 
   //GYRO/ACCEL
   sensor.getAcceleration(&ax, &ay, &az);
@@ -111,7 +95,7 @@ void loop() {
 
 
   payload = "angular:"+String(deg_x)+","+String(deg_y)+":3";
-  client.publish("sensors/angular", payload.c_str());
+  client.publish("ibaby/sensors/angular", payload.c_str());
 
   //GPS
   while(Serial2.available()){
@@ -128,7 +112,7 @@ void loop() {
     spd=gps.speed.kmph();
   }
   payload = "gps:"+String(lat)+","+String(lon)+","+String(spd)+":4";
-  client.publish("sensors/gps", payload.c_str());
+  client.publish("ibaby/sensors/gps", payload.c_str());
 
   //Air particle
   while(Serial1.available()>=4){
@@ -140,19 +124,97 @@ void loop() {
   }
   data= int(dataH)*128 + int(dataL);
   payload = "airPart:"+String(data)+":5";
-  client.publish("sensors/airPart", payload.c_str()); //µg/m³
-/*   Serial.println("here");
+  client.publish("ibaby/sensors/airPart", payload.c_str()); //µg/m³
+
+  //Pressure
+  /*analogRead(PRESS_PIN);
+  Serial.println(analogRead(PRESS_PIN));*/
+
   //TOF
-  VL53L0X_RangingMeasurementData_t measure;
+  uint16_t distance = tof.read();
 
-  tof.rangingTest(&measure, false);
-  Serial.println(String(measure.RangeMilliMeter)+"mm");
-  
-  if(measure.RangeStatus!=4){
-    payload="proximity:"+String(measure.RangeMilliMeter)+":1";
-    client.publish("sensors/proximity", payload.c_str());
+  payload="proximity:"+String(distance)+":6";
+  client.publish("ibaby/sensors/proximity", payload.c_str());
 
+  //BUZZER
+  noTone(BUZZER_PIN);
+  const int tonos[] = {261, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494};
+  const int countTonos = 10;
+  String pld="buzzer:"+buzz+":1";
+  client.publish("ibaby/actuators/buzzer", pld.c_str());
+}
+
+void reconnect(){
+  //MQTT
+  client.setServer(mqtt_server, 1883);
+  while (!client.connected()) {
+    if (client.connect("ESP32Client")) {
+      Serial.println("Conectado al broker MQTT");
+      client.subscribe("ibaby/actuators/POST");
+    } else {
+      Serial.println("Error de conexión MQTT, rc=");
+      Serial.print(client.state());
+      delay(2000);
+    }
   }
-  Serial.println("done"); */
-  delay(UPDATE_INTERVAL);
+}
+
+void setup() {
+  Serial.begin(115200);
+  Serial1.begin(GPS_BAUD, SERIAL_8N1, 25, 16);
+  Serial2.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
+  client.setCallback(callback);
+  ledcSetup(0, 1000, 8);
+  ledcAttachPin(BUZZER_PIN, 0);
+  //WIFI CONN
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.println("Conectando a WiFi...");
+  }
+  Serial.println("Conectado a WiFi");
+
+  dht.begin(); //DHT
+  Wire.begin(); //I2C
+  
+  tof.setTimeout(1000);
+  tof.init();
+  tof.setDistanceMode(VL53L1X::Long);  
+  tof.setMeasurementTimingBudget(50000);
+  tof.startContinuous(50);
+
+  sensor.initialize(); //ACCEL/GYRO
+
+  /*for(byte addr= 1; addr <127; addr++){
+    Wire.beginTransmission(addr);
+    if(Wire.endTransmission()==0){
+      Serial.print("I2C device found at: 0x");
+      Serial.println(addr, HEX);
+    }
+  }*/
+
+  //offset calibration
+  sensor.getAcceleration(&ax, &ay, &az);
+
+  float x_offset=atan(ax/sqrt(pow(ay,2) + pow(az,2)))*(180.0/3.14);
+  float y_offset=atan(ay/sqrt(pow(ax,2) + pow(az,2)))*(180.0/3.14);
+
+  //pressure
+  pinMode(PRESS_PIN, INPUT);
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+  if (!client.connected()) {
+    Serial.print(client.state());
+    reconnect();
+  }
+
+  client.loop();
+  
+  if (currentMillis - lastUpdate >= UPDATE_INTERVAL) {
+    lastUpdate = currentMillis;
+
+    publishSensors();
+  }
 }
