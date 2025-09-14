@@ -10,19 +10,23 @@
 
 const char* ssid = "Juanito";
 const char* password = "olelaferia";
-const char* mqtt_server = "mqtt.eclipseprojects.io"; //192.168.241.170 para casa
+//const char* mqtt_server = "mqtt.eclipseprojects.io";
+const char* mqtt_server = "10.164.114.170";
+
+const int STROLLERID = 1;
 
 WiFiClient wifiClientTx;
 
 PubSubClient client(wifiClientTx);
-
-void callback(char* topic, byte* payload, unsigned int length);
 
 String buzz="";
 
 //DHT11
 #define DHT_PIN 17
 #define DHTTYPE DHT11
+
+float temp;
+float hum;
 
 DHT dht(DHT_PIN, DHTTYPE);
 
@@ -55,36 +59,53 @@ VL53L1X tof;
 //BUZZER
 #define BUZZER_PIN 12
 
+//LUZ
+#define LDR_PIN 32
+int inputLDR;
+
+//LED
+#define LED_PIN 27
+
 static const uint64_t UPDATE_INTERVAL = 4000;
 unsigned long lastUpdate =0;
 
-void callback(char* topic, byte* payload, unsigned int length){
-  String top = topic;
-  String mensaje;
-  for(int i=0; i<length ; i++){
-    mensaje += (char)payload[i];
-  }
+bool isFirst = true;
 
-  if(mensaje=="buzzer:1:1"){
-    tone(BUZZER_PIN, 523, 1000);
-    Serial.println("buzz!");
-    buzz="1";
-  }else{
-    noTone(BUZZER_PIN);
-    buzz="0";
+
+void actuatorsLogic(){
+  String payload;
+
+  if(inputLDR > 350 || temp > 33 || hum > 90){
+    digitalWrite(LED_PIN, HIGH);
+    sleep(1);
+    digitalWrite(LED_PIN, LOW);
+    sleep(1);
+    digitalWrite(LED_PIN, HIGH);
+    sleep(1);
+    digitalWrite(LED_PIN, LOW);
+    sleep(1);
+    digitalWrite(LED_PIN, HIGH);
+    sleep(1);
+    digitalWrite(LED_PIN, LOW);
+    payload = "led:ON:1:"+String(STROLLERID);
+
+  } else{
+    digitalWrite(LED_PIN, LOW);
+    payload = "led:OFF:1:"+String(STROLLERID);
   }
+    client.publish("ibaby/actuators/LED", payload.c_str());
 }
 
 void publishSensors(){
   //TEMP
-  float temp = dht.readTemperature();
+  temp = dht.readTemperature();
   // Publish data on theme
-  String payload = "temperatura:"+String(temp)+":1";
+  String payload = "temperatura:"+String(temp)+":1"+":"+STROLLERID;
   client.publish("ibaby/sensors/temperatura", payload.c_str());
 
   //HUM
-  float hum = dht.readHumidity();
-  payload = "humedad:"+String(hum)+":2";
+  hum = dht.readHumidity();
+  payload = "humedad:"+String(hum)+":2"+":"+STROLLERID;
   client.publish("ibaby/sensors/humedad", payload.c_str());
 
   //GYRO/ACCEL
@@ -94,7 +115,7 @@ void publishSensors(){
   float deg_y=atan(ay/sqrt(pow(ax,2) + pow(az,2)))*(180.0/3.14) - y_offset;
 
 
-  payload = "angular:"+String(deg_x)+","+String(deg_y)+":3";
+  payload = "angular:"+String(deg_x)+","+String(deg_y)+":3"+":"+STROLLERID;
   client.publish("ibaby/sensors/angular", payload.c_str());
 
   //GPS
@@ -111,7 +132,7 @@ void publishSensors(){
     lon=gps.location.lng();
     spd=gps.speed.kmph();
   }
-  payload = "gps:"+String(lat)+","+String(lon)+","+String(spd)+":4";
+  payload = "gps:"+String(lat)+","+String(lon)+","+String(spd)+":4"+":"+STROLLERID;
   client.publish("ibaby/sensors/gps", payload.c_str());
 
   //Air particle
@@ -123,7 +144,7 @@ void publishSensors(){
     }
   }
   data= int(dataH)*128 + int(dataL);
-  payload = "airPart:"+String(data)+":5";
+  payload = "airPart:"+String(data)+":5"+":"+STROLLERID;
   client.publish("ibaby/sensors/airPart", payload.c_str()); //µg/m³
 
   //Pressure
@@ -133,15 +154,20 @@ void publishSensors(){
   //TOF
   uint16_t distance = tof.read();
 
-  payload="proximity:"+String(distance)+":6";
+  payload="proximity:"+String(distance)+":6"+":"+STROLLERID;
   client.publish("ibaby/sensors/proximity", payload.c_str());
 
   //BUZZER
   noTone(BUZZER_PIN);
   const int tonos[] = {261, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494};
   const int countTonos = 10;
-  String pld="buzzer:"+buzz+":1";
+  String pld="buzzer:"+buzz+":1"+":"+STROLLERID;
   client.publish("ibaby/actuators/buzzer", pld.c_str());
+
+  //LDR
+  inputLDR = analogRead(LDR_PIN);
+  payload="light:"+String(inputLDR)+":7"+":"+STROLLERID;
+  client.publish("ibaby/sensors/LDR", payload.c_str());
 }
 
 void reconnect(){
@@ -150,7 +176,6 @@ void reconnect(){
   while (!client.connected()) {
     if (client.connect("ESP32Client")) {
       Serial.println("Conectado al broker MQTT");
-      client.subscribe("ibaby/actuators/POST");
     } else {
       Serial.println("Error de conexión MQTT, rc=");
       Serial.print(client.state());
@@ -163,7 +188,6 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(GPS_BAUD, SERIAL_8N1, 25, 16);
   Serial2.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
-  client.setCallback(callback);
   ledcSetup(0, 1000, 8);
   ledcAttachPin(BUZZER_PIN, 0);
   //WIFI CONN
@@ -201,6 +225,12 @@ void setup() {
 
   //pressure
   pinMode(PRESS_PIN, INPUT);
+
+  //LDR
+  pinMode(LDR_PIN, INPUT);
+
+  //LED
+  pinMode(LED_PIN, OUTPUT);
 }
 
 void loop() {
@@ -215,6 +245,16 @@ void loop() {
   if (currentMillis - lastUpdate >= UPDATE_INTERVAL) {
     lastUpdate = currentMillis;
 
+    if(isFirst){
+      //Registrar carrito en base de datos
+      String payload = String(STROLLERID);
+      client.publish("ibaby/strollers", payload.c_str());
+      isFirst = false;
+      Serial.println(payload);
+    }
+
     publishSensors();
+
+    actuatorsLogic();
   }
 }
