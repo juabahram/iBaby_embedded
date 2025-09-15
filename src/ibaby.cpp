@@ -10,8 +10,8 @@
 
 const char* ssid = "Juanito";
 const char* password = "olelaferia";
-//const char* mqtt_server = "mqtt.eclipseprojects.io";
-const char* mqtt_server = "10.164.114.170";
+const char* mqtt_server = "broker.hivemq.com";
+//const char* mqtt_server = "10.164.114.170";
 
 const int STROLLERID = 1;
 
@@ -43,6 +43,7 @@ TinyGPSPlus gps;
 
 //MPU6050 Accel/gyro
 MPU6050 sensor;
+float ang;
 
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
@@ -57,7 +58,9 @@ int data;
 VL53L1X tof;
 
 //BUZZER
-#define BUZZER_PIN 12
+#define BUZZER_PIN 23
+//const int tones[] = {294, 294, 587, 440, 415, 392, 349, 294, 349, 392};
+const int itone = 294;
 
 //LUZ
 #define LDR_PIN 32
@@ -73,9 +76,10 @@ bool isFirst = true;
 
 
 void actuatorsLogic(){
+  //LED
   String payload;
 
-  if(inputLDR > 350 || temp > 33 || hum > 90){
+  if(inputLDR > 800 || temp > 33 || hum > 90){
     digitalWrite(LED_PIN, HIGH);
     sleep(1);
     digitalWrite(LED_PIN, LOW);
@@ -93,7 +97,24 @@ void actuatorsLogic(){
     digitalWrite(LED_PIN, LOW);
     payload = "led:OFF:1:"+String(STROLLERID);
   }
-    client.publish("ibaby/actuators/LED", payload.c_str());
+  client.publish("ibaby/actuators/LED", payload.c_str());
+
+  //BUZZER
+  String payload1;
+  if(data > 60 || ang > 30){
+    for (int i = 0; i < 3; i++)
+    {
+      ledcWriteTone(0, itone);
+      delay(500);
+      ledcWriteTone(0, 0);
+      delay(200);
+      payload1 = "buzzer:ON:2:"+String(STROLLERID);
+    }
+  } else{
+    payload1 = "buzzer:OFF:2:"+String(STROLLERID);
+    ledcWriteTone(0, 0);
+  }  
+  client.publish("ibaby/actuators/buzzer", payload1.c_str());
 }
 
 void publishSensors(){
@@ -114,6 +135,8 @@ void publishSensors(){
   float deg_x=atan(ax/sqrt(pow(ay,2) + pow(az,2)))*(180.0/3.14) - x_offset;
   float deg_y=atan(ay/sqrt(pow(ax,2) + pow(az,2)))*(180.0/3.14) - y_offset;
 
+
+  ang = sqrt((deg_x * deg_x) + (deg_y * deg_y));
 
   payload = "angular:"+String(deg_x)+","+String(deg_y)+":3"+":"+STROLLERID;
   client.publish("ibaby/sensors/angular", payload.c_str());
@@ -157,13 +180,6 @@ void publishSensors(){
   payload="proximity:"+String(distance)+":6"+":"+STROLLERID;
   client.publish("ibaby/sensors/proximity", payload.c_str());
 
-  //BUZZER
-  noTone(BUZZER_PIN);
-  const int tonos[] = {261, 277, 294, 311, 330, 349, 370, 392, 415, 440, 466, 494};
-  const int countTonos = 10;
-  String pld="buzzer:"+buzz+":1"+":"+STROLLERID;
-  client.publish("ibaby/actuators/buzzer", pld.c_str());
-
   //LDR
   inputLDR = analogRead(LDR_PIN);
   payload="light:"+String(inputLDR)+":7"+":"+STROLLERID;
@@ -188,8 +204,9 @@ void setup() {
   Serial.begin(115200);
   Serial1.begin(GPS_BAUD, SERIAL_8N1, 25, 16);
   Serial2.begin(GPS_BAUD, SERIAL_8N1, RXD2, TXD2);
-  ledcSetup(0, 1000, 8);
-  ledcAttachPin(BUZZER_PIN, 0);
+
+  ledcSetup(0, 2000, 8); 
+  ledcAttachPin(BUZZER_PIN, 0); 
   //WIFI CONN
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
